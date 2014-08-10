@@ -188,7 +188,7 @@ public class CircleDetectionPanel extends JPanel {
 			private static final int MAX = 200;
 			private static final int MINOR_SPACE = 1;
 			private static final int MAJOR_SPACE = 20;
-			private static final String LABEL = "Radius: ";
+			private static final String LABEL = "Max. radius: ";
 			
 			public RadiusSlider() {
 				super(LABEL, MIN, MAX, MINOR_SPACE, MAJOR_SPACE);

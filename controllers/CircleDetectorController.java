@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -127,44 +128,48 @@ public class CircleDetectorController extends BaseController implements Observer
 		houghspaceMonitor.writeDataToFile("/home/harry/tmp/out.csv");
 		
 		// Now create the houghspace image TODO: Improve
-		List<Map.Entry<PlottedCircleData, MutableInt>> sortedData = houghspaceMonitor.getSortedData();
-//		Map<Integer, PlottedCircleData> rawData = houghspaceMonitor.getRawData();
-//		
-//		for(Map.Entry<Integer, PlottedCircleData> entry : rawData.entrySet())
-//		{
-//			PlottedCircleData pcd = entry.getValue();
-//			houshSpaceImgRaster.setPixel(pcd.x, pcd.y, PIXEL_MAX_INTENSITY);
-//		}
-		
-		int[] pIntensity = new int[1];
-		for(Map.Entry<PlottedCircleData, MutableInt> entry : sortedData)
-		{
-			PlottedCircleData pcd = entry.getKey();
-			pIntensity = houshSpaceImgRaster.getPixel(pcd.x, pcd.y, pIntensity);
-			pIntensity[0] = Math.min(pIntensity[0] + 2, 255);
-			houshSpaceImgRaster.setPixel(pcd.x, pcd.y, pIntensity);
+		Map<Coordinate, Map<Integer, MutableInt>> rawData = houghspaceMonitor.getRawData();
+				
+		// Build hough space image
+		{			
+			for(Map.Entry<Coordinate, Map<Integer, MutableInt>> coordEntry : rawData.entrySet())
+			{
+				Coordinate c = coordEntry.getKey();
+				int aggregatedIntensity = 0;
+				for(Map.Entry<Integer, MutableInt> radiusEntry : coordEntry.getValue().entrySet())
+				{
+					aggregatedIntensity += radiusEntry.getValue().get();
+				}
+				houshSpaceImgRaster.setPixel(c.x, c.y, new int[]{aggregatedIntensity});
+			}
 		}
 		
-		for(int i = 0; i < 100; i++)
+		// This will filter out the data
+		List<Map.Entry<Coordinate, Map.Entry<Integer, MutableInt>>> sortedData = houghspaceMonitor.getSortedData();
+		
+		for(int i = 0; i < 10 && i < sortedData.size(); i++)
 		{
-			System.out.println(i + " : " + sortedData.get(i).getValue().get());
-			drawCircle(sortedData.get(i).getKey(), detectedCirclesImgRaster);
+			Coordinate coord = sortedData.get(i).getKey();
+			Integer radius = sortedData.get(i).getValue().getKey();
+			Integer count = sortedData.get(i).getValue().getValue().get();
+			System.out.println(i + " : [" + coord + "," + radius + "] --> " + count);
+			drawCircle(coord, radius, detectedCirclesImgRaster);
 		}
 
 		updateDisplay();
 	}
 	
-	private void drawCircle(PlottedCircleData circleSpecs, WritableRaster imgRaster)
+	private void drawCircle(Coordinate coord, Integer radius, WritableRaster imgRaster)
 	{
-		double pointsToPlot = TWO_PI * circleSpecs.r;
+		double pointsToPlot = TWO_PI * radius;
 		double angleIncrement = TWO_PI/pointsToPlot;
 		int width = imgRaster.getWidth();
 		int height = imgRaster.getHeight();
 			
 		for(double angle = 0.; angle < TWO_PI; angle += angleIncrement)
 		{
-			int x = (int) (circleSpecs.x + (circleSpecs.r * Math.cos(angle)));
-			int y = (int) (circleSpecs.y + (circleSpecs.r * Math.sin(angle)));
+			int x = (int) (coord.x + (radius * Math.cos(angle)));
+			int y = (int) (coord.y + (radius * Math.sin(angle)));
 
 			if(x >= 0 && x < width && y >= 0 && y < height)
 				imgRaster.setPixel(x, y, PIXEL_MAX_INTENSITY);
@@ -185,19 +190,28 @@ public class CircleDetectorController extends BaseController implements Observer
 	
 	private class HoughSpaceMonitor
 	{
-		Map<PlottedCircleData, MutableInt> data;
+		Map<Coordinate, Map<Integer, MutableInt>> data;
 		
 		public HoughSpaceMonitor()
 		{
-			data = new HashMap<PlottedCircleData, MutableInt>();
+			data = new HashMap<Coordinate, Map<Integer, MutableInt>>();
 		}
 		
-		private void increment(PlottedCircleData circleSpecs)
+		private void increment(int x, int y, int r)
 		{
-			MutableInt count = data.get(circleSpecs);
+			Coordinate c = new Coordinate(x,y);
+			Map<Integer, MutableInt> coordinateData = data.get(c);
 			
+			if(coordinateData == null)
+			{
+				data.put(c, new HashMap<Integer, MutableInt>());
+				coordinateData = data.get(c);
+			}
+
+			MutableInt count = coordinateData.get(r);
+				
 			if(count == null)
-				data.put(circleSpecs, new MutableInt());
+				coordinateData.put(r, new MutableInt());
 			else
 				count.increment();
 		}
@@ -216,64 +230,78 @@ public class CircleDetectorController extends BaseController implements Observer
 					int y = (int) (origY + (radius * Math.sin(angle)));
 
 					if(x >= 0 && x < imgWidth && y >= 0 && y < imgHeight)
-						increment(new PlottedCircleData(x, y, radius));
+						increment(x, y, radius);
 				}
 			}
 		}
-		
-		public void addNewCircleData(int origX, int origY, int imgWidth, int imgHeight, int fromRadius, int toRadius, WritableRaster raster)
+		public List<Map.Entry<Coordinate, Map.Entry<Integer, MutableInt>>> getSortedData()
 		{
-			double pointsToPlot, angleIncrement;
-			for(int radius = fromRadius; radius <= toRadius; radius += 5)
+			// First for each coordinate, get the most probable radius
+			Map<Coordinate, Map.Entry<Integer, MutableInt>> topRadiusPerCoord = new HashMap<Coordinate, Map.Entry<Integer, MutableInt>>();
+			for(Map.Entry<Coordinate, Map<Integer, MutableInt>> entry : data.entrySet())
 			{
-				pointsToPlot = TWO_PI * radius;
-				angleIncrement = TWO_PI/pointsToPlot;
+				List<Map.Entry<Integer, MutableInt>> sortedEntry = new ArrayList<Map.Entry<Integer, MutableInt>>(entry.getValue().entrySet());
 				
-				for(double angle = 0.; angle < TWO_PI; angle += angleIncrement)
-				{
-					int x = (int) (origX + (radius * Math.cos(angle)));
-					int y = (int) (origY + (radius * Math.sin(angle)));
-
-					if(x >= 0 && x < imgWidth && y >= 0 && y < imgHeight)
-					{
-						increment(new PlottedCircleData(x, y, radius));
-						raster.setPixel(x, y, new int[]{255});
+				Collections.sort(sortedEntry, new Comparator<Map.Entry<Integer, MutableInt>>() {
+					@Override
+					public int compare(Entry<Integer, MutableInt> o1,
+							Entry<Integer, MutableInt> o2) {
+						return (o1.getValue().get() - o2.getValue().get());
 					}
-				}
+				});
+				Collections.reverse(sortedEntry);				
+				topRadiusPerCoord.put(entry.getKey(), sortedEntry.get(0));
 			}
-		}
-		
-		public List<Map.Entry<PlottedCircleData, MutableInt>> getSortedData()
-		{
-			List<Map.Entry<PlottedCircleData, MutableInt>> sortedData = new ArrayList<Map.Entry<PlottedCircleData, MutableInt>>(data.entrySet());
-			Collections.sort(sortedData, new Comparator<Map.Entry<PlottedCircleData, MutableInt>>() {
+			
+			List<Map.Entry<Coordinate, Map.Entry<Integer, MutableInt>>> sortedCoord = new ArrayList<Map.Entry<Coordinate, Map.Entry<Integer, MutableInt>>>(topRadiusPerCoord.entrySet());
+			Collections.sort(sortedCoord, new Comparator<Map.Entry<Coordinate, Map.Entry<Integer, MutableInt>>>() {
+
 				@Override
-				public int compare(Entry<PlottedCircleData, MutableInt> o1,
-						Entry<PlottedCircleData, MutableInt> o2) {
-					return (o1.getValue().get() - o2.getValue().get());
+				public int compare(
+						Entry<Coordinate, Entry<Integer, MutableInt>> o1,
+						Entry<Coordinate, Entry<Integer, MutableInt>> o2) {
+					return (o1.getValue().getValue().get() - o2.getValue().getValue().get());
 				}
 			});
-			Collections.reverse(sortedData);
-			return sortedData;
+			Collections.reverse(sortedCoord);			
+			return sortedCoord;
 		}
 		
-		public Map<PlottedCircleData, MutableInt> getRawData()
+//		public List<Map.Entry<PlottedCircleData, MutableInt>> getSortedData()
+//		{
+//			List<Map.Entry<PlottedCircleData, MutableInt>> sortedData = new ArrayList<Map.Entry<PlottedCircleData, MutableInt>>(data.entrySet());
+//			Collections.sort(sortedData, new Comparator<Map.Entry<PlottedCircleData, MutableInt>>() {
+//				@Override
+//				public int compare(Entry<PlottedCircleData, MutableInt> o1,
+//						Entry<PlottedCircleData, MutableInt> o2) {
+//					return (o1.getValue().get() - o2.getValue().get());
+//				}
+//			});
+//			Collections.reverse(sortedData);
+//			return sortedData;
+//		}
+		
+		public Map<Coordinate, Map<Integer, MutableInt>> getRawData()
 		{
 			return data;
 		}
 		
 		public void writeDataToFile(String filename)
-		{			
+		{	
 			try {
 				BufferedWriter bw = new BufferedWriter(new FileWriter(new File(filename), false));
 				bw.write("X,Y,R,Count");
 				bw.newLine();
-				for(Map.Entry<PlottedCircleData, MutableInt> entry : data.entrySet())
+				for(Map.Entry<Coordinate, Map<Integer, MutableInt>> coordEntry : data.entrySet())
 				{
-					PlottedCircleData c = entry.getKey();
-					bw.write(c.x + "," + c.y + "," + c.r + "," + entry.getValue().get());
-					bw.newLine();
+					Coordinate c = coordEntry.getKey();
+					for(Map.Entry<Integer, MutableInt> radiusEntry : coordEntry.getValue().entrySet())
+					{
+						bw.write(c.x + "," + c.y + "," + radiusEntry.getKey() + "," + radiusEntry.getValue().get());
+						bw.newLine();
+					}
 				}
+				bw.close();
 			} catch (IOException e) {
 				// TODO Auto-generated catch block
 				e.printStackTrace();
@@ -281,21 +309,21 @@ public class CircleDetectorController extends BaseController implements Observer
 		}
 	}
 	
-	public class PlottedCircleData{
-		int x, y, r;
+	public class Coordinate
+	{
+		private int x, y;
 		
-		PlottedCircleData(int x, int y, int r)
+		private Coordinate(int x, int y)
 		{
 			this.x = x;
 			this.y = y;
-			this.r = r;
 		}
 		
 		@Override
 		public int hashCode() {
 			final int prime = 31;
 			int result = 1;
-			result = prime * result + r;
+			result = prime * result + getOuterType().hashCode();
 			result = prime * result + x;
 			result = prime * result + y;
 			return result;
@@ -309,10 +337,8 @@ public class CircleDetectorController extends BaseController implements Observer
 				return false;
 			if (getClass() != obj.getClass())
 				return false;
-			PlottedCircleData other = (PlottedCircleData) obj;
+			Coordinate other = (Coordinate) obj;
 			if (!getOuterType().equals(other.getOuterType()))
-				return false;
-			if (r != other.r)
 				return false;
 			if (x != other.x)
 				return false;
@@ -320,15 +346,15 @@ public class CircleDetectorController extends BaseController implements Observer
 				return false;
 			return true;
 		}
-		
-		private CircleDetectorController getOuterType() {
-			return CircleDetectorController.this;
-		}
-		
+
 		@Override
 		public String toString()
 		{
-			return ("[" + x + "," + y + "," + r + "]");
-		} 
+			return ("[" + x + "," + y + "]" );
+		}
+
+		private CircleDetectorController getOuterType() {
+			return CircleDetectorController.this;
+		}
 	}
 }
