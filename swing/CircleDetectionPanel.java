@@ -4,11 +4,15 @@ import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
+import java.beans.PropertyChangeEvent;
+import java.beans.PropertyChangeListener;
 
+import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.JProgressBar;
 import javax.swing.JSlider;
 
 import utils.Constants;
@@ -59,15 +63,19 @@ public class CircleDetectionPanel extends JPanel {
 		return imgPanel;
 	}
 	
-	private class CircleDetectorControls extends JPanel implements ActionListener
+	private class CircleDetectorControls extends JPanel implements ActionListener, PropertyChangeListener
 	{			
 		LabeledSlider radiusSlider;
 		JComboBox<String> displayTypeCB;
 		JButton confirmBtn;
 		CircleDetector detector;
+		JProgressBar progressBar;
 		
 		CircleDetectorControls(CircleDetector detector)
 		{
+			progressBar = new JProgressBar(0, 100);
+			progressBar.setBorder(BorderFactory.createEmptyBorder(0, 0, 10, 0));
+			
 			displayTypeCB = new JComboBox<String>(new String[] {CircleDetectorController.ImageType.HOUGH_SPACE.getName(), CircleDetectorController.ImageType.CIRCLE_DETECTED.getName()});
 			displayTypeCB.addActionListener(this);
 			
@@ -79,6 +87,8 @@ public class CircleDetectionPanel extends JPanel {
 			confirmBtn.addActionListener(this);
 			
 			initLayout();
+			
+			progressBar.setVisible(false);
 		}
 		
 		public void initLayout()
@@ -88,21 +98,26 @@ public class CircleDetectionPanel extends JPanel {
 			GridBagConstraints c = new GridBagConstraints();
 			c.fill = GridBagConstraints.BOTH;
 			c.gridx = 0;
+			c.gridy = 0;
 			c.weightx = 1;
 			
+			// Display progress bar
+			c.weighty = .1f;
+			add(progressBar, c);
+			
 			// Display combo box
-			c.gridy = 0;
+			c.gridy++;
 			c.weighty = .4f;
 			add(displayTypeCB, c);
 			
 			// Radius slider
-			c.gridy = 1;
+			c.gridy++;
 			c.weighty = .4f;
 			add(radiusSlider, c);
 			
 			// Confirm btn
-			c.gridy = 2;
-			c.weighty = .2f;
+			c.gridy++;
+			c.weighty = .1f;
 			add(confirmBtn, c);
 		}
 
@@ -110,7 +125,9 @@ public class CircleDetectionPanel extends JPanel {
 		public void actionPerformed(ActionEvent e) {
 			if(e.getActionCommand().equals(ActionCommands.START)) // Comes from the Start button
 			{
-				detector.detectCircles(radiusSlider.getValue());
+				progressBar.setVisible(true);
+				confirmBtn.setEnabled(false);
+				detector.detectCircles(radiusSlider.getValue(), this);
 			}
 			else // From combobox
 			{
@@ -121,13 +138,27 @@ public class CircleDetectionPanel extends JPanel {
 				}
 				else
 					detector.showDetectedCirclesImg();
-			}	
+			}
+		}
+		
+		@Override
+		public void propertyChange(PropertyChangeEvent evt) {
+            if ("progress".equals(evt.getPropertyName())) {
+    			int progress = (Integer)evt.getNewValue();
+                progressBar.setValue(progress);
+            	
+    			boolean complete = (progress == 100);
+    			if(complete)
+    			{
+    				progressBar.setVisible(false);
+    				confirmBtn.setEnabled(true);
+    			}
+            }
 		}
 		
 		private class ActionCommands{
 			public static final String START = "START";
 		}
-		
 		
 		private class ConfirmBtn extends JButton
 		{
@@ -185,7 +216,7 @@ public class CircleDetectionPanel extends JPanel {
 		
 		private class RadiusSlider extends LabeledSlider {
 			private static final int MIN = Constants.MIN_CIRCLE_RADIUS;
-			private static final int MAX = 200;
+			private static final int MAX = Constants.MAX_CIRCLE_RADIUS;
 			private static final int MINOR_SPACE = 1;
 			private static final int MAJOR_SPACE = 20;
 			private static final String LABEL = "Max. radius: ";

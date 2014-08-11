@@ -19,7 +19,6 @@ import swing.ImageFileChooser;
 import swing.ImagePanel;
 import swing.IntermediaryPanel;
 import utils.Constants;
-import controllers.CircleDetectorController;
 import controllers.ControllerManager;
 
 public class ApplicationWindow extends JFrame implements ActionListener {

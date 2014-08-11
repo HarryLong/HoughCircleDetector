@@ -1,8 +1,12 @@
 package utils.image;
+import geometry.Circle;
+
 import java.awt.Image;
 import java.awt.image.BufferedImage;
 import java.awt.image.ColorModel;
 import java.awt.image.WritableRaster;
+
+import utils.Constants;
 
 
 public class ImageUtils {
@@ -56,6 +60,23 @@ public class ImageUtils {
 		 boolean isAlphaPremultiplied = cm.isAlphaPremultiplied();
 		 WritableRaster raster = bi.copyData(null);
 		 return new BufferedImage(cm, raster, isAlphaPremultiplied, null);
+	}
+	
+	public static void drawCircle(Circle circle, WritableRaster imgRaster)
+	{
+		double perimeter = circle.getPerimeter();
+		double angleIncrement = Constants.TWO_PI/perimeter;
+		int width = imgRaster.getWidth();
+		int height = imgRaster.getHeight();
+			
+		for(double angle = 0.; angle < Constants.TWO_PI; angle += angleIncrement)
+		{
+			int x = (int) (circle.getOrigin().getX() + (circle.getRadius() * Math.cos(angle)));
+			int y = (int) (circle.getOrigin().getY() + (circle.getRadius() * Math.sin(angle)));
+
+			if(x >= 0 && x < width && y >= 0 && y < height)
+				imgRaster.setPixel(x, y, Constants.PIXEL_MAX_INTENSITY);
+		}
 	}
 	
 	static int getAvgRGB(int intRGB)

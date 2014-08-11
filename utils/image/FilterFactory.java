@@ -23,12 +23,6 @@ public class FilterFactory {
 	       -1.f,  -1.f,  -1.f
 	};
 	
-//	private static final float[] SMOOTH_FILTER = new float[] {
-//			0.111f, 0.111f, 0.111f, 
-//		    0.111f, 0.111f, 0.111f, 
-//		    0.111f, 0.111f, 0.111f
-//	};
-	
 	private static final float[] SMOOTH_FILTER = new float[] {
 		0.111f, .111f, .111f, 
 	    0.111f, .111f, .111f, 

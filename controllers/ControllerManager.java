@@ -3,6 +3,8 @@ package controllers;
 import java.awt.image.BufferedImage;
 import java.util.Observer;
 
+import utils.Constants;
+
 
 public class ControllerManager {
 	BaseController baseImgeCntrl; // Base
