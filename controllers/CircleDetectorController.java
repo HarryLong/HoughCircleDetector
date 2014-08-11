@@ -1,5 +1,8 @@
 package controllers;
 
+import geometry.Circle;
+import geometry.Coordinate2D;
+
 import java.awt.image.BufferedImage;
 import java.awt.image.Raster;
 import java.awt.image.WritableRaster;
@@ -21,6 +24,7 @@ import java.util.Observer;
 import java.util.Set;
 
 import utils.Constants;
+import utils.Tuple;
 import utils.image.ImageUtils;
 
 public class CircleDetectorController extends BaseController implements Observer, CircleDetector{
@@ -131,28 +135,28 @@ public class CircleDetectorController extends BaseController implements Observer
 		
 		// Create the houghspace image
 		{		
-			Map<Coordinate, Map<Integer, MutableInt>> rawData = houghspaceMonitor.getRawData();
-			for(Map.Entry<Coordinate, Map<Integer, MutableInt>> coordEntry : rawData.entrySet())
+			Map<Coordinate2D, Map<Integer, MutableInt>> rawData = houghspaceMonitor.getRawData();
+			for(Map.Entry<Coordinate2D, Map<Integer, MutableInt>> coordEntry : rawData.entrySet())
 			{
-				Coordinate c = coordEntry.getKey();
+				Coordinate2D c = coordEntry.getKey();
 				int aggregatedIntensity = 0;
 				for(Map.Entry<Integer, MutableInt> radiusEntry : coordEntry.getValue().entrySet())
 				{
 					aggregatedIntensity += radiusEntry.getValue().get();
 				}
-				houshSpaceImgRaster.setPixel(c.x, c.y, new int[]{aggregatedIntensity});
+				houshSpaceImgRaster.setPixel(c.getX(), c.getY(), new int[]{aggregatedIntensity});
 			}
 		}
 		
 		// Perform extra filtering on the sorted Data
 		{
-			List<Tuple<CircleSpecs, Integer>> sortedData = houghspaceMonitor.getSortedData();
+			CircleCounterList sortedData = houghspaceMonitor.getSortedData();
 			houghspaceMonitor.writeSortedDataToFile("/home/harry/tmp/out_sorted_all.csv");
 			
 			// First take only values larger than one standard deviation
 			{
-				double mean = calculateMean(sortedData);
-				double standardDeviation = calculateStandardDeviation(sortedData, mean);
+				double mean = sortedData.getMean();
+				double standardDeviation = sortedData.getStandardDeviation(mean);
 				double threshold = mean + standardDeviation;
 				
 				System.out.println("First statistical filter threshold: " + threshold);
@@ -162,54 +166,53 @@ public class CircleDetectorController extends BaseController implements Observer
 					int i = 0;
 					while(true)
 					{
-						if(sortedData.get(i).el2 < threshold)
+						if(sortedData.get(i).getCount() < threshold)
 						{
-							sortedData = sortedData.subList(0, i);
+							sortedData = new CircleCounterList(sortedData.subList(0, i));
 							break;
 						}
 						i++;
 					}
 				}
 				System.out.println("Post statistical deletion size: " + sortedData.size());
-				CircleDetectorController.writeToFile("/home/harry/tmp/out_sorted_stat_filtered.csv", sortedData);	
+				sortedData.writeToFile("/home/harry/tmp/out_sorted_stat_filtered.csv");
 			}
 			
 			// Now remove similar circles
-			List<Tuple<CircleSpecs, Integer>> uniqueCoordinates = new ArrayList<Tuple<CircleSpecs, Integer>>();
+			CircleCounterList uniqueCoordinates = new CircleCounterList();
 			{
-				Set<Coordinate> coordinatesToRemove = new HashSet<Coordinate>();
-				Iterator<Tuple<CircleSpecs, Integer>> sortedCoordinatesIt = sortedData.iterator();
+				Set<Coordinate2D> coordinatesToRemove = new HashSet<Coordinate2D>();
+				Iterator<CircleCounter> sortedCoordinatesIt = sortedData.iterator();
 				while(sortedCoordinatesIt.hasNext())
 				{
-					Tuple<CircleSpecs, Integer> entry = sortedCoordinatesIt.next();
-					Coordinate coord = entry.el1.origin;
+					CircleCounter entry = sortedCoordinatesIt.next();
+					Circle circle = entry.getCircle();
+					Coordinate2D origin = circle.getOrigin();
 					
-					if(!coordinatesToRemove.contains(coord))
+					if(!coordinatesToRemove.contains(circle.getOrigin()))
 					{
-						int radius = entry.el1.radius;
-						int count = entry.el2;
-						uniqueCoordinates.add(new Tuple<CircleSpecs, Integer>(entry.el1, count));
-						for(int y = Math.max(0, coord.y - radius); y < Math.min(imgHeight, coord.y + radius); y++)
+						int radius = circle.getRadius();
+						int count = entry.getCount();
+						uniqueCoordinates.add(new CircleCounter(circle, count));
+						for(int y = Math.max(0, origin.getY() - radius); y < Math.min(imgHeight, origin.getY() + radius); y++)
 						{
-							for(int x = Math.max(0, coord.x - radius); x < Math.min(imgWidth, coord.x + radius); x++)
+							for(int x = Math.max(0, origin.getX() - radius); x < Math.min(imgWidth, origin.getX() + radius); x++)
 							{
-								Coordinate coordToSkip = new Coordinate(x, y);
-								if(coordToSkip != coord)
-								{
+								Coordinate2D coordToSkip = new Coordinate2D(x, y);
+								if(coordToSkip != origin)
 									coordinatesToRemove.add(coordToSkip);
-								}
 							}
 						}
 					}
 				}
 				System.out.println("Post similar coordinate deletion size: " + uniqueCoordinates.size());
-				CircleDetectorController.writeToFile("/home/harry/tmp/out_sorted_similarities_filtered.csv", uniqueCoordinates);	
+				uniqueCoordinates.writeToFile("/home/harry/tmp/out_sorted_similarities_filtered.csv");
 			}
 			
 			// Again, take only values larger than one standard deviation
 			{
-				double mean = calculateMean(uniqueCoordinates);
-				double standardDeviation = calculateStandardDeviation(sortedData, mean);
+				double mean = uniqueCoordinates.getMean();
+				double standardDeviation = uniqueCoordinates.getStandardDeviation(mean);
 				double threshold = mean + standardDeviation;
 				System.out.println("Second statistical filter threshold: " + threshold);
 				// Perform deletion
@@ -218,69 +221,43 @@ public class CircleDetectorController extends BaseController implements Observer
 					int i = 0;
 					while(true)
 					{
-						if(uniqueCoordinates.get(i).el2 < threshold)
+						if(uniqueCoordinates.get(i).getCount() < threshold)
 						{
-							uniqueCoordinates = uniqueCoordinates.subList(0, i);
+							uniqueCoordinates = new CircleCounterList(uniqueCoordinates.subList(0, i));
 							break;
 						}
 						i++;
 					}
 				}
 				System.out.println("Post second statistical deletion size: " + uniqueCoordinates.size());
-				CircleDetectorController.writeToFile("/home/harry/tmp/out_sorted_stat2_filtered.csv", sortedData);	
+				uniqueCoordinates.writeToFile("/home/harry/tmp/out_sorted_stat2_filtered.csv");	
 			}
 				
-			for(Tuple<CircleSpecs, Integer> circle : uniqueCoordinates)
+			for(CircleCounter cc : uniqueCoordinates)
 			{
-				System.out.println(circle.el1 + " --> " + circle.el2);
-				drawCircle(circle.el1, detectedCirclesImgRaster);
+				System.out.println(cc);
+				drawCircle(cc.getCircle(), detectedCirclesImgRaster);
 			}
 		}
 
 		updateDisplay();
 	}
 	
-	private void drawCircle(CircleSpecs circleSpecs, WritableRaster imgRaster)
+	private void drawCircle(Circle circle, WritableRaster imgRaster)
 	{
-		double pointsToPlot = TWO_PI * circleSpecs.radius;
+		double pointsToPlot = TWO_PI * circle.getRadius();
 		double angleIncrement = TWO_PI/pointsToPlot;
 		int width = imgRaster.getWidth();
 		int height = imgRaster.getHeight();
 			
 		for(double angle = 0.; angle < TWO_PI; angle += angleIncrement)
 		{
-			int x = (int) (circleSpecs.origin.x + (circleSpecs.radius * Math.cos(angle)));
-			int y = (int) (circleSpecs.origin.y + (circleSpecs.radius * Math.sin(angle)));
+			int x = (int) (circle.getOrigin().getX() + (circle.getRadius() * Math.cos(angle)));
+			int y = (int) (circle.getOrigin().getY() + (circle.getRadius() * Math.sin(angle)));
 
 			if(x >= 0 && x < width && y >= 0 && y < height)
 				imgRaster.setPixel(x, y, PIXEL_MAX_INTENSITY);
 		}
-	}
-	
-	public double calculateMean(List<Tuple<CircleSpecs, Integer>> data)
-	{
-		int totalCoordinates = data.size();
-		double mean = 0.;
-		
-		// Mean
-		{
-			for(Tuple<CircleSpecs, Integer> entry  : data)
-				mean += entry.el2;
-		}
-		return (mean /= totalCoordinates);
-	}
-	
-	public double calculateStandardDeviation(List<Tuple<CircleSpecs, Integer>> data, double mean)
-	{
-		int totalCoordinates = data.size();
-		double variance = 0.;		
-		// Variance
-		{
-			for(Tuple<CircleSpecs, Integer> entry  : data)
-				variance += Math.pow(entry.el2 - mean, 2);
-		}
-		variance /= totalCoordinates;
-		return Math.sqrt(variance);
 	}
 	
 	// Important to set as used when displayed in the combo box
@@ -297,19 +274,19 @@ public class CircleDetectorController extends BaseController implements Observer
 	
 	private class HoughSpaceMonitor
 	{
-		Map<Coordinate, Map<Integer, MutableInt>> data;
-		List<Tuple<CircleSpecs, Integer>> sortedData;
+		Map<Coordinate2D, Map<Integer, MutableInt>> data;
+		CircleCounterList sortedData;
 		boolean sortRequired;
 		
 		public HoughSpaceMonitor()
 		{
-			data = new HashMap<Coordinate, Map<Integer, MutableInt>>();
+			data = new HashMap<Coordinate2D, Map<Integer, MutableInt>>();
 			sortRequired = false;
 		}
 		
 		private void increment(int x, int y, int r)
 		{
-			Coordinate c = new Coordinate(x,y);
+			Coordinate2D c = new Coordinate2D(x,y);
 			Map<Integer, MutableInt> coordinateData = data.get(c);
 			
 			if(coordinateData == null)
@@ -349,9 +326,9 @@ public class CircleDetectorController extends BaseController implements Observer
 		private void filterAndSort()
 		{
 			// First for each coordinate, get the most probable circle			
-			Map<Coordinate, Map.Entry<Integer, MutableInt>> topRadiusPerCoord = new HashMap<Coordinate, Map.Entry<Integer, MutableInt>>();
+			Map<Coordinate2D, Map.Entry<Integer, MutableInt>> topRadiusPerCoord = new HashMap<Coordinate2D, Map.Entry<Integer, MutableInt>>();
 			{
-				for(Map.Entry<Coordinate, Map<Integer, MutableInt>> entry : data.entrySet())
+				for(Map.Entry<Coordinate2D, Map<Integer, MutableInt>> entry : data.entrySet())
 				{
 					List<Map.Entry<Integer, MutableInt>> sortedEntry = new ArrayList<Map.Entry<Integer, MutableInt>>(entry.getValue().entrySet());
 					
@@ -368,14 +345,14 @@ public class CircleDetectorController extends BaseController implements Observer
 			}
 			
 			// Now sort the coordinates
-			List<Map.Entry<Coordinate, Map.Entry<Integer, MutableInt>>> sortedCoord = new ArrayList<Map.Entry<Coordinate, Map.Entry<Integer, MutableInt>>>(topRadiusPerCoord.entrySet());
+			List<Map.Entry<Coordinate2D, Map.Entry<Integer, MutableInt>>> sortedCoord = new ArrayList<Map.Entry<Coordinate2D, Map.Entry<Integer, MutableInt>>>(topRadiusPerCoord.entrySet());
 			{
-				Collections.sort(sortedCoord, new Comparator<Map.Entry<Coordinate, Map.Entry<Integer, MutableInt>>>() {
+				Collections.sort(sortedCoord, new Comparator<Map.Entry<Coordinate2D, Map.Entry<Integer, MutableInt>>>() {
 
 					@Override
 					public int compare(
-							Entry<Coordinate, Entry<Integer, MutableInt>> o1,
-							Entry<Coordinate, Entry<Integer, MutableInt>> o2) {
+							Entry<Coordinate2D, Entry<Integer, MutableInt>> o1,
+							Entry<Coordinate2D, Entry<Integer, MutableInt>> o2) {
 						return (o1.getValue().getValue().get() - o2.getValue().getValue().get());
 					}
 				});
@@ -383,14 +360,14 @@ public class CircleDetectorController extends BaseController implements Observer
 			}
 
 			
-			List<Tuple<CircleSpecs, Integer>> formattedSorted = new ArrayList<Tuple<CircleSpecs, Integer>>();			
-			for(Map.Entry<Coordinate, Map.Entry<Integer, MutableInt>> e : sortedCoord)
+			CircleCounterList formattedSorted = new CircleCounterList();		
+			for(Map.Entry<Coordinate2D, Map.Entry<Integer, MutableInt>> e : sortedCoord)
 			{
-				Coordinate origin = e.getKey();
+				Coordinate2D origin = e.getKey();
 				int radius = e.getValue().getKey();
 				int count = e.getValue().getValue().get();
 				
-				formattedSorted.add(new Tuple<CircleSpecs, Integer>(new CircleSpecs(origin, radius), count));
+				formattedSorted.add(new CircleCounter(new Circle(origin, radius), count));
 			}
 
 			
@@ -399,7 +376,7 @@ public class CircleDetectorController extends BaseController implements Observer
 			sortRequired = false;
 		}
 		
-		public List<Tuple<CircleSpecs, Integer>> getSortedData()
+		public CircleCounterList getSortedData()
 		{
 			if(sortedData == null || sortRequired)
 				filterAndSort();
@@ -407,21 +384,7 @@ public class CircleDetectorController extends BaseController implements Observer
 			return sortedData;
 		}
 		
-//		public List<Map.Entry<PlottedCircleData, MutableInt>> getSortedData()
-//		{
-//			List<Map.Entry<PlottedCircleData, MutableInt>> sortedData = new ArrayList<Map.Entry<PlottedCircleData, MutableInt>>(data.entrySet());
-//			Collections.sort(sortedData, new Comparator<Map.Entry<PlottedCircleData, MutableInt>>() {
-//				@Override
-//				public int compare(Entry<PlottedCircleData, MutableInt> o1,
-//						Entry<PlottedCircleData, MutableInt> o2) {
-//					return (o1.getValue().get() - o2.getValue().get());
-//				}
-//			});
-//			Collections.reverse(sortedData);
-//			return sortedData;
-//		}
-		
-		public Map<Coordinate, Map<Integer, MutableInt>> getRawData()
+		public Map<Coordinate2D, Map<Integer, MutableInt>> getRawData()
 		{
 			return data;
 		}
@@ -432,12 +395,12 @@ public class CircleDetectorController extends BaseController implements Observer
 				BufferedWriter bw = new BufferedWriter(new FileWriter(new File(filename), false));
 				bw.write("X,Y,R,Count");
 				bw.newLine();
-				for(Map.Entry<Coordinate, Map<Integer, MutableInt>> coordEntry : data.entrySet())
+				for(Map.Entry<Coordinate2D, Map<Integer, MutableInt>> coordEntry : data.entrySet())
 				{
-					Coordinate c = coordEntry.getKey();
+					Coordinate2D c = coordEntry.getKey();
 					for(Map.Entry<Integer, MutableInt> radiusEntry : coordEntry.getValue().entrySet())
 					{
-						bw.write(c.x + "," + c.y + "," + radiusEntry.getKey() + "," + radiusEntry.getValue().get());
+						bw.write(c.getX() + "," + c.getY() + "," + radiusEntry.getKey() + "," + radiusEntry.getValue().get());
 						bw.newLine();
 					}
 				}
@@ -450,106 +413,92 @@ public class CircleDetectorController extends BaseController implements Observer
 		
 		public void writeSortedDataToFile(String filename)
 		{	
-			CircleDetectorController.writeToFile(filename, getSortedData());
+			getSortedData().writeToFile(filename);
 		}
 	}
 	
-	public class Tuple<T1,T2>
-	{
-		T1 el1;
-		T2 el2;
-		
-		Tuple(T1 el1, T2 el2)
+	private class CircleCounter extends Tuple<Circle, Integer>
+	{		
+		CircleCounter(Circle c, Integer counter)
 		{
-			this.el1 = el1;
-			this.el2 = el2;
+			super(c, counter);
 		}
-	}
-	
-	public class Coordinate
-	{
-		private int x, y;
 		
-		private Coordinate(int x, int y)
+		public Circle getCircle()
 		{
-			this.x = x;
-			this.y = y;
+			return getKey();
 		}
 		
-		@Override
-		public int hashCode() {
-			final int prime = 31;
-			int result = 1;
-			result = prime * result + getOuterType().hashCode();
-			result = prime * result + x;
-			result = prime * result + y;
-			return result;
-		}
-
-		@Override
-		public boolean equals(Object obj) {
-			if (this == obj)
-				return true;
-			if (obj == null)
-				return false;
-			if (getClass() != obj.getClass())
-				return false;
-			Coordinate other = (Coordinate) obj;
-			if (!getOuterType().equals(other.getOuterType()))
-				return false;
-			if (x != other.x)
-				return false;
-			if (y != other.y)
-				return false;
-			return true;
-		}
-
-		@Override
-		public String toString()
+		public Integer getCount()
 		{
-			return ("[" + x + "," + y + "]" );
-		}
-
-		private CircleDetectorController getOuterType() {
-			return CircleDetectorController.this;
-		}
-	}
-	
-	public class CircleSpecs
-	{
-		Coordinate origin;
-		int radius;
-		
-		public CircleSpecs(Coordinate origin, int radius) {
-			this.origin = origin;
-			this.radius = radius;
+			return getValue();
 		}
 		
 		@Override
 		public String toString()
 		{
-			return ("[" + origin.toString() + "," + radius + "]" );
+			return (getKey() + " --> " + getCount());
 		}
 	}
 	
-	public static void writeToFile(String filename, List<Tuple<CircleSpecs, Integer>> data)
-	{
-		try {
-			BufferedWriter bw = new BufferedWriter(new FileWriter(new File(filename), false));
-			bw.write("X,Y,R,Count");
-			bw.newLine();
-			for(Tuple<CircleSpecs, Integer> entry : data)
-			{
-				Coordinate c = entry.el1.origin;
-				Integer radius = entry.el1.radius;
-				Integer count = entry.el2;
-				bw.write(c.x + "," + c.y + "," + radius + "," + count);
+	private class CircleCounterList extends ArrayList<CircleCounter>
+	{	
+		public CircleCounterList()
+		{
+			super();
+		}
+		
+		public CircleCounterList(List<CircleCounter> initList)
+		{
+			super(initList);
+		}
+		
+		public double getMean()
+		{
+			int totalCoordinates = size();
+			double mean = 0.;
+			
+			for(CircleCounter cc : this)
+					mean += cc.getCount();
+
+			return (mean /= totalCoordinates);
+		}
+		
+		public double getStandardDeviation()
+		{
+			return getStandardDeviation(getMean());
+		}
+		
+		public double getStandardDeviation(double mean)
+		{
+			int totalCoordinates = size();
+			double variance = 0.;		
+			// Variance
+			for(CircleCounter cc : this)
+				variance += Math.pow(cc.getCount() - mean, 2);
+			variance /= totalCoordinates;
+			return Math.sqrt(variance);
+		}
+		
+		public void writeToFile(String filename)
+		{
+			try {
+				BufferedWriter bw = new BufferedWriter(new FileWriter(new File(filename), false));
+				bw.write("X,Y,R,Count");
 				bw.newLine();
+				for(CircleCounter cc : this)
+				{
+					Coordinate2D coord = cc.getCircle().getOrigin();
+					Integer radius = cc.getCircle().getRadius();
+					Integer count = cc.getCount();
+					bw.write(coord.getX() + "," + coord.getY() + "," + radius + "," + count);
+					bw.newLine();
+				}
+				bw.close();
+			} catch (IOException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
 			}
-			bw.close();
-		} catch (IOException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
 		}
 	}
 }
